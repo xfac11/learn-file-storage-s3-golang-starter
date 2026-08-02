@@ -1,10 +1,13 @@
 package main
 
 import (
-	"encoding/base64"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
@@ -41,13 +44,11 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		respondWithError(w, http.StatusBadRequest, "Unable to parse form file", err)
 		return
 	}
-	mediaType := header.Header.Get("Content-Type")
-	imageData, err := io.ReadAll(file)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Unable to read the thumbnail file", err)
+	mediaType, _, err := mime.ParseMediaType(header.Header.Get("Content-Type"))
+	if !(mediaType == "image/jpeg" || mediaType == "image/png") {
+		respondWithError(w, http.StatusBadRequest, "Not supported media type. Use a jpeg or png", err)
 		return
 	}
-
 	video, err := cfg.db.GetVideo(videoID)
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Unable to find the video", err)
@@ -59,10 +60,21 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	imageDataInbase64 := base64.StdEncoding.EncodeToString(imageData)
+	fileExtension := strings.Split(mediaType, "/")[1]
+	filePath := filepath.Join(cfg.assetsRoot, videoID.String())
+	newFile, err := os.Create(filePath + "." + fileExtension)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Could not save the image on the servers file system", err)
+		return
+	}
 
-	//data URL
-	thumbnailURL := "data:" + mediaType + ";base64," + imageDataInbase64
+	_, err = io.Copy(newFile, file)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Could not copy the file from the request to the server", err)
+		return
+	}
+
+	thumbnailURL := fmt.Sprintf("http://localhost:%s/assets/%s.%s", cfg.port, videoID, fileExtension)
 	video.ThumbnailURL = &thumbnailURL
 
 	err = cfg.db.UpdateVideo(video)
